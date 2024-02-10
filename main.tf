@@ -1,4 +1,7 @@
-# Configure the Terraform runtime requirements.
+# !!! This should only be used with a backend that stores encrypted state, like
+# Terraform Cloud or AWS S3. Local state is NOT encrypted and should only be
+# used to spin up temporary dev testing environments. 
+
 terraform {
   required_version = ">= 1.1.0"
 
@@ -8,10 +11,9 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.0.2"
     }
-    # Azure Resource Manager REST API for features not supported by AzureRM
-    azapi = {
-      source  = "azure/azapi"
-      version = "~>1.5"
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0.5"
     }
   }
 }
@@ -21,8 +23,7 @@ provider "azurerm" {
   features {}
 }
 
-provider "azapi" {
-}
+provider "tls" {}
 
 # Define config variables
 variable "labelPrefix" {
@@ -40,29 +41,22 @@ resource "azurerm_resource_group" "rg" {
   location = var.region
 }
 
-resource "azapi_resource" "ssh_key_pair" {
-  type      = "Microsoft.Compute/sshPublicKeys@2022-11-01"
-  name      = "${var.labelPrefix}-SSH-publicKey"
-  location  = azurerm_resource_group.rg.location
-  parent_id = azurerm_resource_group.rg.id
+# Generate an RSA key of size 4096 bits
+# This is an in-memory resource. 
+# Caution! It is stored in your Terraform state.
+resource "tls_private_key" "rsa" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
 }
 
-# This should only be used with a backend that stores encrypted state, like
-# Terraform Cloud or AWS S3. Local state is NOT encrypted and should only be
-# used to spin up temporary dev testing environments. 
-resource "azapi_resource_action" "gen_ssh_keys" {
-  type        = "Microsoft.Compute/sshPublicKeys@2022-11-01"
-  resource_id = azapi_resource.ssh_key_pair.id
-  action      = "generateKeyPair"
-  method      = "POST"
-
-  response_export_values = ["publicKey", "privateKey"]
-}
-
-output "public_key" {
-  value = jsondecode(azapi_resource_action.gen_ssh_keys.output).publicKey
+resource "azurerm_ssh_public_key" "example" {
+  name                = "${var.labelPrefix}-A05B-SSH-publicKey"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  public_key          = tls_private_key.rsa.public_key_openssh
 }
 
 output "private_key" {
-  value = jsondecode(azapi_resource_action.gen_ssh_keys.output).privateKey
+  sensitive = true
+  value     = tls_private_key.rsa.private_key_openssh
 }
